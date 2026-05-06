@@ -97,6 +97,55 @@ export async function applyLinkedIn(
       };
     }
 
+    // ── If this is a search results page, try to click the first job listing ──
+    const currentUrl = page.url();
+    const isSearchPage =
+      currentUrl.includes("/jobs/search") ||
+      currentUrl.includes("/jobs/collections") ||
+      currentUrl.includes("keywords=");
+
+    if (isSearchPage) {
+      // If not logged in, search page can't navigate to job detail
+      // Try clicking the first job card to navigate to a specific listing
+      const firstJobCard = page.locator(
+        "a.job-card-container__link, " +
+        "a[data-control-name='jobcard_title'], " +
+        ".jobs-search-results__list-item a, " +
+        "li.jobs-search-results__list-item a[href*='/jobs/view/']"
+      ).first();
+
+      const cardVisible = await firstJobCard.isVisible({ timeout: 5_000 }).catch(() => false);
+      if (cardVisible) {
+        await firstJobCard.click();
+        await page.waitForTimeout(3_000);
+        // If navigated to login wall after click, require login
+        if (
+          page.url().includes("/login") ||
+          page.url().includes("/authwall") ||
+          page.url().includes("/checkpoint")
+        ) {
+          const ss = await page.screenshot();
+          return {
+            ok: false,
+            applied: false,
+            message: "LinkedIn requires login to view and apply to jobs — please provide your credentials",
+            screenshotBase64: ss.toString("base64"),
+            requiresLogin: true,
+          };
+        }
+      } else {
+        // No job cards visible without login
+        const ss = await page.screenshot();
+        return {
+          ok: false,
+          applied: false,
+          message: "LinkedIn requires login to view and apply to jobs — please provide your credentials",
+          screenshotBase64: ss.toString("base64"),
+          requiresLogin: true,
+        };
+      }
+    }
+
     // ── Find and click Easy Apply ────────────────────────────────────────────
     const easyApplyBtn = page
       .locator(
