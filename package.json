@@ -1,0 +1,21 @@
+{
+  "name": "velamini-browser-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright-based browser automation service for external job applications",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node --esm src/index.ts"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "^1.44.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}

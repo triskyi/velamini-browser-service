@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: velamini-browser-service
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npx playwright install --with-deps chromium && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: BROWSER_SERVICE_SECRET
+        sync: false        # set manually in Render dashboard
+      - key: NODE_ENV
+        value: production
