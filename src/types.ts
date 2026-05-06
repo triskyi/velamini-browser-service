@@ -23,6 +23,8 @@ export interface ApplyRequest {
   site: SupportedSite;
   /** Full URL to the job listing */
   jobUrl: string;
+  /** Optional job title used to find the correct role on company job boards */
+  jobTitle?: string;
   applicant: ApplicantProfile;
   /**
    * JSON-serialised Playwright cookie array for the user's session on this site.
@@ -40,7 +42,7 @@ export interface ApplyRequest {
    * Site credentials supplied by the user when the site requires login.
    * Used for a one-time login session — never persisted.
    */
-  credentials?: { siteEmail: string; sitePassword: string };
+  credentials?: { siteEmail: string; sitePassword: string; loginMethod?: 'email' | 'google' };
 }
 
 export interface ApplyResult {
@@ -51,4 +53,13 @@ export interface ApplyResult {
   screenshotBase64?: string;
   /** True when the site blocked access due to missing/expired login */
   requiresLogin?: boolean;
+  /**
+   * True when the job page requires email-based application.
+   * The Next.js layer will send the email via Resend using the user's resume.
+   */
+  applyByEmail?: boolean;
+  /** The employer email address to send the application to */
+  applicationEmail?: string;
+  /** The job title extracted from the page (used in email subject) */
+  emailSubjectHint?: string;
 }

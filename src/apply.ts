@@ -56,7 +56,8 @@ export async function applyToJob(req: ApplyRequest): Promise<ApplyResult> {
           req.applicant,
           req.cookiesJson,
           req.coverLetter,
-          req.answers
+          req.answers,
+          req.jobTitle
         );
     }
   } finally {

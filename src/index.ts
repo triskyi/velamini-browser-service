@@ -49,6 +49,7 @@ app.post("/apply", async (req: Request, res: Response) => {
   const request: ApplyRequest = {
     site: body.site ?? "generic",
     jobUrl: body.jobUrl,
+    jobTitle: body.jobTitle,
     applicant: body.applicant,
     cookiesJson: body.cookiesJson,
     coverLetter: body.coverLetter,

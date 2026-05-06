@@ -6,20 +6,42 @@ const UA =
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 /**
- * Attempt to log in to LinkedIn using email + password.
+ * Attempt to log in to LinkedIn using email + password or Google account.
  * Returns true if login succeeded, false otherwise.
  */
-async function loginLinkedIn(page: Page, email: string, password: string): Promise<boolean> {
+async function loginLinkedIn(page: Page, email: string, password: string, loginMethod: 'email' | 'google' = 'email'): Promise<boolean> {
   try {
     await page.goto("https://www.linkedin.com/login", {
       waitUntil: "domcontentloaded",
       timeout: 20_000,
     });
-    await page.fill("#username", email);
-    await page.fill("#password", password);
-    await page.click("button[type='submit']");
-    // Wait for navigation after login
-    await page.waitForTimeout(5_000);
+    if (loginMethod === 'google') {
+      // Click the "Continue with Google" button
+      const googleBtn = page.locator("button[data-tracking-control-name='auth_wall_google_login'], button:has-text('Continue with Google')").first();
+      await googleBtn.click();
+      // Wait for Google OAuth popup or redirect
+      await page.waitForTimeout(5_000);
+      // If popup, handle it (assuming email and password are Google credentials)
+      const popup = page.context().pages().find(p => p.url().includes('accounts.google.com'));
+      if (popup) {
+        await popup.fill("#identifierId", email);
+        await popup.click("#identifierNext");
+        await page.waitForTimeout(2_000);
+        if (password) {
+          await popup.fill("input[type='password']", password);
+          await popup.click("#passwordNext");
+        }
+        await page.waitForTimeout(5_000);
+      }
+      // Wait for navigation back to LinkedIn
+      await page.waitForTimeout(5_000);
+    } else {
+      await page.fill("#username", email);
+      await page.fill("#password", password);
+      await page.click("button[type='submit']");
+      // Wait for navigation after login
+      await page.waitForTimeout(5_000);
+    }
     const url = page.url();
     // Successful login redirects away from /login and /checkpoint
     return !url.includes("/login") && !url.includes("/checkpoint") && !url.includes("/authwall");
@@ -46,7 +68,7 @@ export async function applyLinkedIn(
   cookiesJson: string | undefined,
   coverLetter?: string,
   answers?: Record<string, string>,
-  credentials?: { siteEmail: string; sitePassword: string }
+  credentials?: { siteEmail: string; sitePassword: string; loginMethod?: 'email' | 'google' }
 ): Promise<ApplyResult> {
   const context = await browser.newContext({ userAgent: UA });
 
@@ -63,7 +85,7 @@ export async function applyLinkedIn(
 
   // If credentials provided, log in first before navigating to the job
   if (credentials) {
-    const loggedIn = await loginLinkedIn(page, credentials.siteEmail, credentials.sitePassword);
+    const loggedIn = await loginLinkedIn(page, credentials.siteEmail, credentials.sitePassword, credentials.loginMethod || 'email');
     if (!loggedIn) {
       const ss = await page.screenshot();
       await context.close();

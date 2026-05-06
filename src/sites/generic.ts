@@ -22,7 +22,8 @@ export async function applyGeneric(
   applicant: ApplicantProfile,
   cookiesJson: string | undefined,
   coverLetter?: string,
-  answers?: Record<string, string>
+  answers?: Record<string, string>,
+  jobTitle?: string
 ): Promise<ApplyResult> {
   const context = await browser.newContext({
     userAgent: UA,
@@ -41,25 +42,46 @@ export async function applyGeneric(
 
   try {
     await page.goto(jobUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await openMatchingJobFromBoard(page, jobTitle);
+
+    // ── Detect email-only application instructions ───────────────────────────
+    const pageText = (await page.textContent("body") ?? "");
+    const mailtoHref = await page
+      .locator("a[href^='mailto:'], a[href^='MAILTO:']")
+      .first()
+      .getAttribute("href")
+      .catch(() => "");
+    const emailJobAddress = extractApplicationEmail(`${pageText} ${mailtoHref ?? ""}`);
+    if (emailJobAddress) {
+      // Extract a possible job title from the <title> or <h1>
+      const pageTitle = await page.title().catch(() => "");
+      const h1 = await page.locator("h1").first().textContent().catch(() => "");
+      const ss = await page.screenshot();
+      return {
+        ok: true,
+        applied: false,
+        applyByEmail: true,
+        applicationEmail: emailJobAddress,
+        emailSubjectHint: (h1 || pageTitle || "").trim(),
+        message: `This job requires an email application to ${emailJobAddress}`,
+        screenshotBase64: ss.toString("base64"),
+      };
+    }
 
     // ── Find and follow an "Apply" link/button ───────────────────────────────
-    const applyLink = page
-      .locator(
-        "a:has-text('Apply Now'), a:has-text('Apply now'), a:has-text('Apply for this job'), " +
-        "button:has-text('Apply Now'), button:has-text('Apply now'), " +
-        "a:has-text('Submit Application'), input[value*='Apply']"
-      )
-      .first();
+    const applyLink = findApplyTrigger(page);
 
     if (await applyLink.isVisible({ timeout: 6_000 }).catch(() => false)) {
-      await applyLink.click();
-      await page.waitForTimeout(2_500);
+      await clickAndSettle(applyLink, page);
     }
     // If no button, assume the current page IS the form
 
     // Detect the best form on the page
     const form = page.locator("form").first();
-    const formExists = await form.isVisible({ timeout: 5_000 }).catch(() => false);
+    let formExists = await form.isVisible({ timeout: 5_000 }).catch(() => false);
+    if (!formExists && await navigateToLikelyApplyUrl(page)) {
+      formExists = await form.isVisible({ timeout: 5_000 }).catch(() => false);
+    }
     if (!formExists) {
       const ss = await page.screenshot();
       return {
@@ -143,6 +165,84 @@ export async function applyGeneric(
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+function findApplyTrigger(page: import("playwright").Page): import("playwright").Locator {
+  return page
+    .locator(
+      [
+        "a:has-text('Apply Now')",
+        "a:has-text('Apply now')",
+        "a:has-text('Apply')",
+        "a:has-text('Apply for this job')",
+        "a:has-text('Apply for this position')",
+        "a:has-text('Apply to this job')",
+        "a:has-text('Submit Application')",
+        "button:has-text('Apply Now')",
+        "button:has-text('Apply now')",
+        "button:has-text('Apply')",
+        "button:has-text('Apply for this job')",
+        "button:has-text('Apply for this position')",
+        "button:has-text('Apply to this job')",
+        "button:has-text('Start application')",
+        "input[value*='Apply']",
+      ].join(", ")
+    )
+    .first();
+}
+
+async function clickAndSettle(locator: import("playwright").Locator, page: import("playwright").Page) {
+  const popupPromise = page.waitForEvent("popup", { timeout: 3_000 }).catch(() => null);
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded", { timeout: 8_000 }).catch(() => {}),
+    locator.click(),
+  ]);
+  const popup = await popupPromise;
+  if (popup) {
+    await popup.waitForLoadState("domcontentloaded", { timeout: 8_000 }).catch(() => {});
+    await popup.bringToFront().catch(() => {});
+  }
+  await page.waitForTimeout(2_000);
+}
+
+async function openMatchingJobFromBoard(
+  page: import("playwright").Page,
+  jobTitle: string | undefined
+) {
+  if (!jobTitle?.trim()) return;
+  if (/\/apply\/?$/i.test(page.url())) return;
+  if (await page.locator("form").first().isVisible({ timeout: 1_000 }).catch(() => false)) return;
+
+  const title = jobTitle.trim();
+  const links = page.locator("a").filter({ hasText: title });
+  const visibleLink = links.first();
+
+  if (await visibleLink.isVisible({ timeout: 4_000 }).catch(() => false)) {
+    await clickAndSettle(visibleLink, page);
+    return;
+  }
+
+  const titleText = page.getByText(title, { exact: false }).first();
+  if (await titleText.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await clickAndSettle(titleText, page);
+  }
+}
+
+async function navigateToLikelyApplyUrl(page: import("playwright").Page): Promise<boolean> {
+  const currentUrl = page.url();
+  try {
+    const url = new URL(currentUrl);
+    if (
+      url.hostname.includes("workable.com") &&
+      /\/j\/[^/]+\/?$/i.test(url.pathname)
+    ) {
+      url.pathname = `${url.pathname.replace(/\/+$/, "")}/apply/`;
+      await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 15_000 });
+      await page.waitForTimeout(2_000);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 async function fillAllInputs(
   page: import("playwright").Page,
   applicant: ApplicantProfile,
@@ -153,7 +253,7 @@ async function fillAllInputs(
   // File upload
   if (resumePath) {
     const fileInput = page.locator("input[type='file']").first();
-    if (await fileInput.isVisible({ timeout: 800 }).catch(() => false)) {
+    if ((await fileInput.count()) > 0) {
       await fileInput.setInputFiles(resumePath);
       await page.waitForTimeout(1_500);
     }
@@ -176,20 +276,85 @@ async function fillAllInputs(
   const textareas = await page.locator("textarea:visible").all();
   for (const ta of textareas) {
     if ((await ta.inputValue()).trim() !== "") continue;
-    await ta.fill((coverLetter ?? applicant.resumeText).slice(0, 2_000));
+    const label = await resolveLabel(ta);
+    const val = resolveValue(label, applicant, answers);
+    if (val !== null) {
+      await ta.fill(val.slice(0, 2_000));
+    } else if (
+      label.includes("summary") ||
+      label.includes("profile") ||
+      label.includes("cover") ||
+      label.includes("letter") ||
+      label.includes("experience")
+    ) {
+      await ta.fill((coverLetter ?? applicant.resumeText).slice(0, 2_000));
+    }
   }
 
-  // Select dropdowns — choose first non-empty option
+  // Select dropdowns — choose answer match first, otherwise first non-empty option
   const selects = await page.locator("select:visible").all();
   for (const sel of selects) {
     if ((await sel.inputValue()).trim()) continue;
+    const label = await resolveLabel(sel);
+    const desired = resolveValue(label, applicant, answers);
     const opts = await sel.locator("option").all();
+    if (desired) {
+      for (const opt of opts) {
+        const v = await opt.getAttribute("value");
+        const text = (await opt.textContent().catch(() => "") ?? "").trim();
+        if (
+          v &&
+          (v.toLowerCase().includes(desired.toLowerCase()) ||
+            text.toLowerCase().includes(desired.toLowerCase()))
+        ) {
+          await sel.selectOption(v);
+          break;
+        }
+      }
+      if ((await sel.inputValue()).trim()) continue;
+    }
     for (const opt of opts) {
       const v = await opt.getAttribute("value");
       if (v && v.trim() && v.toLowerCase() !== "select" && v !== "0" && v !== "null") {
         await sel.selectOption(v);
         break;
       }
+    }
+  }
+
+  // Radio groups — pick caller-supplied option when possible, else first visible option.
+  const radios = await page.locator("input[type='radio']:visible").all();
+  const handledRadioNames = new Set<string>();
+  for (const radio of radios) {
+    const name = await radio.getAttribute("name").catch(() => "");
+    if (name && handledRadioNames.has(name)) continue;
+    if (name) handledRadioNames.add(name);
+
+    const group = name
+      ? page.locator(`input[type='radio'][name="${name}"]:visible`)
+      : radio;
+    const groupLabel = await resolveLabel(radio);
+    const desired = resolveValue(groupLabel, applicant, answers);
+    const options = await group.all();
+    let chosen = false;
+
+    if (desired) {
+      for (const option of options) {
+        const optionLabel = await resolveLabel(option);
+        const value = await option.getAttribute("value").catch(() => "");
+        if (
+          optionLabel.includes(desired.toLowerCase()) ||
+          (value ?? "").toLowerCase().includes(desired.toLowerCase())
+        ) {
+          await option.check().catch(() => {});
+          chosen = true;
+          break;
+        }
+      }
+    }
+
+    if (!chosen && options[0]) {
+      await options[0].check().catch(() => {});
     }
   }
 
@@ -220,9 +385,22 @@ async function resolveLabel(
 
   // name attribute
   const name = await el.getAttribute("name").catch(() => "");
+  const type = await el.getAttribute("type").catch(() => "");
 
   // Find associated <label for="id">
   const id = await el.getAttribute("id").catch(() => "");
+  if (id && type === "radio") {
+    const radioLabel = await page
+      .locator(`label[for="${id}"]`)
+      .textContent()
+      .catch(() => "");
+    const questionText = await el
+      .locator("xpath=ancestor::*[self::fieldset or self::div or self::section][1]")
+      .textContent()
+      .catch(() => "");
+    return `${questionText ?? ""} ${radioLabel ?? ""}`.toLowerCase();
+  }
+
   if (id) {
     const labelText = await page
       .locator(`label[for="${id}"]`)
@@ -240,6 +418,12 @@ async function resolveLabel(
       .catch(() => "");
     if (labelText?.trim()) return labelText.toLowerCase();
   }
+
+  const nearbyText = await el
+    .locator("xpath=ancestor::*[self::label or self::div or self::fieldset or self::section][1]")
+    .textContent()
+    .catch(() => "");
+  if (nearbyText?.trim()) return nearbyText.toLowerCase();
 
   return (name ?? "").toLowerCase();
 }
@@ -260,10 +444,54 @@ function resolveValue(
   if (label.includes("portfolio") || label.includes("website") || label.includes("url")) return applicant.portfolioUrl ?? "";
   if (label.includes("city") || label.includes("location") || label.includes("address")) return applicant.location ?? "";
   if (label.includes("year") && label.includes("experience")) return String(applicant.yearsExperience ?? 3);
+  if (label.includes("headline")) return applicant.resumeText.split("\n").find((line) => line.trim())?.slice(0, 120) ?? "";
+  if (label.includes("gross monthly") || label.includes("monthly rate") || label.includes("salary") || label.includes("compensation")) {
+    return answers?.["gross monthly"] ?? answers?.rate ?? answers?.salary ?? null;
+  }
+  if (label.includes("french")) return answers?.french ?? null;
+  if (label.includes("spanish")) return answers?.spanish ?? null;
+  if (label.includes("feedback")) return answers?.feedback ?? null;
 
   // Check caller-supplied custom answers
   const match = Object.entries(answers ?? {}).find(([k]) => label.includes(k));
   if (match) return match[1];
 
   return null;
+}
+
+function extractApplicationEmail(text: string): string | null {
+  const normalized = text.replace(/\s+/g, " ");
+  const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
+  const emails = [...new Set(normalized.match(emailPattern) ?? [])];
+  if (emails.length === 0) return null;
+
+  const applicationCues = [
+    "apply",
+    "application",
+    "submit",
+    "send",
+    "cv",
+    "resume",
+    "cover letter",
+    "career",
+    "recruit",
+    "hr",
+  ];
+
+  for (const email of emails) {
+    const index = normalized.toLowerCase().indexOf(email.toLowerCase());
+    const windowText = normalized
+      .slice(Math.max(0, index - 220), Math.min(normalized.length, index + email.length + 220))
+      .toLowerCase();
+
+    if (applicationCues.some((cue) => windowText.includes(cue))) {
+      return email;
+    }
+  }
+
+  const likelyApplicationEmail = emails.find((email) =>
+    /(^|[._-])(hr|jobs|careers|career|recruitment|recruiting|talent|apply|applications?)([._-]|@)/i.test(email)
+  );
+
+  return likelyApplicationEmail ?? null;
 }
