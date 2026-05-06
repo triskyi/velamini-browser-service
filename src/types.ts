@@ -36,6 +36,11 @@ export interface ApplyRequest {
    * e.g. { "salary": "60000", "start": "immediately" }
    */
   answers?: Record<string, string>;
+  /**
+   * Site credentials supplied by the user when the site requires login.
+   * Used for a one-time login session — never persisted.
+   */
+  credentials?: { siteEmail: string; sitePassword: string };
 }
 
 export interface ApplyResult {
@@ -44,4 +49,6 @@ export interface ApplyResult {
   message: string;
   /** Base64 PNG screenshot taken at the end of the flow */
   screenshotBase64?: string;
+  /** True when the site blocked access due to missing/expired login */
+  requiresLogin?: boolean;
 }

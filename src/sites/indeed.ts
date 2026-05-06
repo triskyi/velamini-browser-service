@@ -1,9 +1,34 @@
-import { Browser, Cookie } from "playwright";
+import { Browser, Cookie, Page } from "playwright";
 import { ApplicantProfile, ApplyResult } from "../types";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+async function loginIndeed(page: Page, email: string, password: string): Promise<boolean> {
+  try {
+    await page.goto("https://secure.indeed.com/auth", {
+      waitUntil: "domcontentloaded",
+      timeout: 20_000,
+    });
+    // Indeed uses an email-first flow
+    const emailInput = page.locator("input[type='email'], input[name='__email']").first();
+    if (await emailInput.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      await emailInput.fill(email);
+      await page.locator("button[type='submit']").first().click();
+      await page.waitForTimeout(2_000);
+    }
+    const passwordInput = page.locator("input[type='password']").first();
+    if (await passwordInput.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      await passwordInput.fill(password);
+      await page.locator("button[type='submit']").first().click();
+      await page.waitForTimeout(4_000);
+    }
+    return !page.url().includes("/auth") && !page.url().includes("/login");
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Indeed "Easily Apply" automation.
@@ -21,7 +46,8 @@ export async function applyIndeed(
   applicant: ApplicantProfile,
   cookiesJson: string | undefined,
   coverLetter?: string,
-  answers?: Record<string, string>
+  answers?: Record<string, string>,
+  credentials?: { siteEmail: string; sitePassword: string }
 ): Promise<ApplyResult> {
   const context = await browser.newContext({
     userAgent: UA,
@@ -36,6 +62,22 @@ export async function applyIndeed(
   }
 
   const page = await context.newPage();
+
+  // Log in first if credentials provided
+  if (credentials) {
+    const loggedIn = await loginIndeed(page, credentials.siteEmail, credentials.sitePassword);
+    if (!loggedIn) {
+      const ss = await page.screenshot();
+      await context.close();
+      return {
+        ok: false,
+        applied: false,
+        message: "Indeed login failed — please check your email and password",
+        screenshotBase64: ss.toString("base64"),
+        requiresLogin: true,
+      };
+    }
+  }
 
   try {
     await page.goto(jobUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -58,11 +100,16 @@ export async function applyIndeed(
 
     if (!(await applyBtn.isVisible({ timeout: 12_000 }).catch(() => false))) {
       const ss = await page.screenshot();
+      const currentUrl = page.url();
+      const isLoginWall = currentUrl.includes("/auth") || currentUrl.includes("/login");
       return {
         ok: false,
         applied: false,
-        message: "No apply button found on Indeed page",
+        message: isLoginWall
+          ? "Indeed requires login — please provide your credentials"
+          : "No apply button found on Indeed page",
         screenshotBase64: ss.toString("base64"),
+        requiresLogin: isLoginWall,
       };
     }
 

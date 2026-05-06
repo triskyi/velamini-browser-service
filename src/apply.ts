@@ -33,7 +33,8 @@ export async function applyToJob(req: ApplyRequest): Promise<ApplyResult> {
           req.applicant,
           req.cookiesJson,
           req.coverLetter,
-          req.answers
+          req.answers,
+          req.credentials
         );
 
       case "indeed":
@@ -43,7 +44,8 @@ export async function applyToJob(req: ApplyRequest): Promise<ApplyResult> {
           req.applicant,
           req.cookiesJson,
           req.coverLetter,
-          req.answers
+          req.answers,
+          req.credentials
         );
 
       case "generic":

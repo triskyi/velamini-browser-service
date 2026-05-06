@@ -1,9 +1,32 @@
-import { Browser, BrowserContext, Cookie } from "playwright";
+import { Browser, BrowserContext, Cookie, Page } from "playwright";
 import { ApplicantProfile, ApplyResult } from "../types";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+/**
+ * Attempt to log in to LinkedIn using email + password.
+ * Returns true if login succeeded, false otherwise.
+ */
+async function loginLinkedIn(page: Page, email: string, password: string): Promise<boolean> {
+  try {
+    await page.goto("https://www.linkedin.com/login", {
+      waitUntil: "domcontentloaded",
+      timeout: 20_000,
+    });
+    await page.fill("#username", email);
+    await page.fill("#password", password);
+    await page.click("button[type='submit']");
+    // Wait for navigation after login
+    await page.waitForTimeout(5_000);
+    const url = page.url();
+    // Successful login redirects away from /login and /checkpoint
+    return !url.includes("/login") && !url.includes("/checkpoint") && !url.includes("/authwall");
+  } catch {
+    return false;
+  }
+}
 
 /**
  * LinkedIn Easy Apply automation.
@@ -22,7 +45,8 @@ export async function applyLinkedIn(
   applicant: ApplicantProfile,
   cookiesJson: string | undefined,
   coverLetter?: string,
-  answers?: Record<string, string>
+  answers?: Record<string, string>,
+  credentials?: { siteEmail: string; sitePassword: string }
 ): Promise<ApplyResult> {
   const context = await browser.newContext({ userAgent: UA });
 
@@ -37,6 +61,22 @@ export async function applyLinkedIn(
 
   const page = await context.newPage();
 
+  // If credentials provided, log in first before navigating to the job
+  if (credentials) {
+    const loggedIn = await loginLinkedIn(page, credentials.siteEmail, credentials.sitePassword);
+    if (!loggedIn) {
+      const ss = await page.screenshot();
+      await context.close();
+      return {
+        ok: false,
+        applied: false,
+        message: "LinkedIn login failed — please check your email and password",
+        screenshotBase64: ss.toString("base64"),
+        requiresLogin: true,
+      };
+    }
+  }
+
   try {
     await page.goto(jobUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
@@ -45,14 +85,15 @@ export async function applyLinkedIn(
       return { ok: false, applied: false, message: "Redirected away from LinkedIn" };
     }
 
-    // If redirected to login page the session cookies are expired
-    if (page.url().includes("/login") || page.url().includes("/checkpoint")) {
+    // If redirected to login page the session cookies are expired / no credentials given
+    if (page.url().includes("/login") || page.url().includes("/checkpoint") || page.url().includes("/authwall")) {
       const ss = await page.screenshot();
       return {
         ok: false,
         applied: false,
-        message: "LinkedIn session expired — refresh cookies",
+        message: "LinkedIn requires login — please provide your credentials",
         screenshotBase64: ss.toString("base64"),
+        requiresLogin: true,
       };
     }
 
@@ -67,11 +108,20 @@ export async function applyLinkedIn(
 
     if (!(await easyApplyBtn.isVisible({ timeout: 12_000 }).catch(() => false))) {
       const ss = await page.screenshot();
+      // If we're not logged in, redirect may have happened silently
+      const currentUrl = page.url();
+      const isLoginWall =
+        currentUrl.includes("/login") ||
+        currentUrl.includes("/authwall") ||
+        currentUrl.includes("/checkpoint");
       return {
         ok: false,
         applied: false,
-        message: "No Easy Apply button — may require external application",
+        message: isLoginWall
+          ? "LinkedIn requires login — please provide your credentials"
+          : "No Easy Apply button — may require external application",
         screenshotBase64: ss.toString("base64"),
+        requiresLogin: isLoginWall,
       };
     }
 
