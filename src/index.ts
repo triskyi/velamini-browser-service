@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import { applyToJob } from "./apply";
+import { loginSite } from "./login";
 import { ApplyRequest } from "./types";
 
 const app = express();
@@ -98,6 +99,21 @@ app.post("/apply/batch", async (req: Request, res: Response) => {
   }
 
   res.json({ results });
+});
+
+// ── Login (store session cookies in Velamini) ─────────────────────────────────
+app.post("/login", async (req: Request, res: Response) => {
+  const { site, email, password, loginMethod } = req.body ?? {};
+  if (!site || !email || !password) {
+    res.status(400).json({ ok: false, error: "site, email and password are required" });
+    return;
+  }
+  try {
+    const result = await loginSite({ site, email, password, loginMethod: loginMethod ?? "email" });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 const PORT = Number(process.env.PORT ?? 3001);
