@@ -1,4 +1,11 @@
-import { chromium } from "playwright";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { chromium } = require("playwright-extra");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+
+// Apply stealth globally — makes Playwright indistinguishable from a real Chrome browser.
+// This bypasses LinkedIn's bot detection (webdriver flags, navigator checks, fingerprinting).
+chromium.use(StealthPlugin());
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -16,6 +23,7 @@ export interface LoginResult {
   cookiesJson?: string;
   error?: string;
 }
+
 
 export async function loginSite(req: LoginRequest): Promise<LoginResult> {
   // Set HEADLESS=false locally to watch the browser window for debugging

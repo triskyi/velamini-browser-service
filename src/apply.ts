@@ -1,4 +1,9 @@
-import { chromium } from "playwright";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { chromium } = require("playwright-extra");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+chromium.use(StealthPlugin());
+
 import { ApplyRequest, ApplyResult, SupportedSite } from "./types";
 import { applyLinkedIn } from "./sites/linkedin";
 import { applyIndeed } from "./sites/indeed";
