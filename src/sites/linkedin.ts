@@ -16,8 +16,8 @@ async function loginLinkedIn(page: Page, email: string, password: string, loginM
       timeout: 20_000,
     });
     // Fill email and password on the LinkedIn login form
-    await page.fill("#username", email);
-    await page.fill("#password", password);
+    await page.fill("[name='session_key']", email);
+    await page.fill("[name='session_password']", password);
     await page.click("button[type='submit']");
     // Wait for navigation after login
     await page.waitForTimeout(5_000);
