@@ -39,11 +39,13 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
     const page = await context.newPage();
 
     if (req.site === "linkedin") {
-      // domcontentloaded is reliable; we wait for the email field explicitly below
+      // domcontentloaded fires early; the form may still be rendering
       await page.goto("https://www.linkedin.com/login", {
         waitUntil: "domcontentloaded",
-        timeout: 20_000,
+        timeout: 30_000,
       });
+      // Give the SPA a moment to hydrate the form
+      await page.waitForTimeout(1_500);
 
       if (req.loginMethod === "google") {
         // LinkedIn hides the "Continue with Google" button in headless/automated browsers.
@@ -55,13 +57,17 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
             "Google sign-in cannot be automated. Please set a LinkedIn password at linkedin.com → Settings → Sign In & Security → Change Password, then use Email & Password login.",
         };
       } else {
-        // LinkedIn redesigned their login — inputs use type attributes, not name="session_key"
-        const emailField    = page.locator("input[type='email']").first();
-        const passwordField = page.locator("input[type='password']").first();
-        const submitBtn     = page.locator("button:has-text('Sign in')").first();
+      // LinkedIn redesigned their login — inputs use type attributes, not name="session_key"
+        const emailField    = page.locator("input[type='email'], input#username, input[name='session_key']").first();
+        const passwordField = page.locator("input[type='password'], input#password, input[name='session_password']").first();
+        const submitBtn     = page.locator("button[type='submit'], button:has-text('Sign in'), button:has-text('Sign In')").first();
 
-        if (!(await emailField.isVisible({ timeout: 8_000 }).catch(() => false))) {
-          return { ok: false, error: "LinkedIn login page did not load — email field not found" };
+        // Wait longer — LinkedIn SPA renders the form after the shell loads
+        const emailVisible = await emailField.isVisible({ timeout: 20_000 }).catch(() => false);
+        if (!emailVisible) {
+          // Capture what the page actually shows for debugging
+          const bodySnippet = ((await page.textContent("body")) ?? "").slice(0, 400);
+          return { ok: false, error: `LinkedIn login page did not load — email field not found. Page content: ${bodySnippet}` };
         }
 
         await emailField.fill(req.email);
