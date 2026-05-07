@@ -58,11 +58,12 @@ async function loginLinkedIn(page: Page, email: string, password: string, loginM
     }
 
     // ── Email / password login ──────────────────────────────────────────────
-    const emailField = page.locator("[name='session_key']");
-    const passwordField = page.locator("[name='session_password']");
-    const submitBtn = page.locator("button[type='submit']");
+    // LinkedIn redesigned their login — inputs use type attributes, not name="session_key"
+    const emailField    = page.locator("input[type='email']").first();
+    const passwordField = page.locator("input[type='password']").first();
+    const submitBtn     = page.locator("button:has-text('Sign in')").first();
 
-    if (!(await emailField.isVisible({ timeout: 5000 }))) {
+    if (!(await emailField.isVisible({ timeout: 8_000 }).catch(() => false))) {
       return { success: false, error: "LinkedIn login page did not load properly — email field not found" };
     }
 

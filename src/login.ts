@@ -18,8 +18,11 @@ export interface LoginResult {
 }
 
 export async function loginSite(req: LoginRequest): Promise<LoginResult> {
+  // Set HEADLESS=false locally to watch the browser window for debugging
+  const headless = process.env.HEADLESS !== "false";
+
   const browser = await chromium.launch({
-    headless: true,
+    headless,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
   });
 
@@ -28,43 +31,28 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
     const page = await context.newPage();
 
     if (req.site === "linkedin") {
+      // domcontentloaded is reliable; we wait for the email field explicitly below
       await page.goto("https://www.linkedin.com/login", {
         waitUntil: "domcontentloaded",
         timeout: 20_000,
       });
 
       if (req.loginMethod === "google") {
-        const googleBtn = page
-          .locator("a[data-tracking-control-name='homepage-guest_google-sign-in-provider'], a:has-text('Sign in with Google')")
-          .first();
-        const visible = await googleBtn.isVisible({ timeout: 5_000 }).catch(() => false);
-        if (!visible) {
-          return { ok: false, error: "Google Sign-In button not found — try Email & Password instead" };
-        }
-        await googleBtn.click();
-        await page.waitForTimeout(4_000);
-
-        const googleEmail = page.locator("input[type='email']").first();
-        if (!(await googleEmail.isVisible({ timeout: 8_000 }).catch(() => false))) {
-          return { ok: false, error: "Google login page did not load — try Email & Password instead" };
-        }
-        await googleEmail.fill(req.email);
-        await page.locator("button:has-text('Next'), #identifierNext").first().click();
-        await page.waitForTimeout(3_000);
-
-        const googlePwd = page.locator("input[type='password']").first();
-        if (!(await googlePwd.isVisible({ timeout: 8_000 }).catch(() => false))) {
-          return { ok: false, error: "Google password page did not load — try Email & Password instead" };
-        }
-        await googlePwd.fill(req.password);
-        await page.locator("button:has-text('Next'), #passwordNext").first().click();
-        await page.waitForTimeout(6_000);
+        // LinkedIn hides the "Continue with Google" button in headless/automated browsers.
+        // Google OAuth popups also block automated logins server-side.
+        // The only reliable path is email + LinkedIn password.
+        return {
+          ok: false,
+          error:
+            "Google sign-in cannot be automated. Please set a LinkedIn password at linkedin.com → Settings → Sign In & Security → Change Password, then use Email & Password login.",
+        };
       } else {
-        const emailField = page.locator("[name='session_key']");
-        const passwordField = page.locator("[name='session_password']");
-        const submitBtn = page.locator("button[type='submit']");
+        // LinkedIn redesigned their login — inputs use type attributes, not name="session_key"
+        const emailField    = page.locator("input[type='email']").first();
+        const passwordField = page.locator("input[type='password']").first();
+        const submitBtn     = page.locator("button:has-text('Sign in')").first();
 
-        if (!(await emailField.isVisible({ timeout: 5_000 }).catch(() => false))) {
+        if (!(await emailField.isVisible({ timeout: 8_000 }).catch(() => false))) {
           return { ok: false, error: "LinkedIn login page did not load — email field not found" };
         }
 
@@ -82,6 +70,13 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
         url.includes("/challenge")
       ) {
         const body = (await page.textContent("body")) ?? "";
+        if (body.includes("one-time link") || body.includes("emailed") || body.includes("check your email")) {
+          return {
+            ok: false,
+            error:
+              "Your LinkedIn account has no password (created with Google). Please go to linkedin.com → Settings → Sign In & Security → Change Password to set one, then retry.",
+          };
+        }
         if (body.includes("incorrect") || body.includes("Invalid") || body.includes("wrong")) {
           return { ok: false, error: "Invalid LinkedIn credentials — check your email and password" };
         }
@@ -92,12 +87,14 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
           body.includes("unusual activity") ||
           body.includes("verify")
         ) {
-          return { ok: false, error: "LinkedIn requires additional verification — try again later or from a different network" };
+          return {
+            ok: false,
+            error: "LinkedIn requires additional verification — try again later or from a different network",
+          };
         }
         return { ok: false, error: "LinkedIn login failed — please check your credentials" };
       }
 
-      // Grab all linkedin.com cookies for the session
       const cookies = await context.cookies("https://www.linkedin.com");
       if (cookies.length === 0) {
         return { ok: false, error: "LinkedIn login appeared to succeed but no session cookies were found" };
@@ -108,7 +105,6 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
     }
 
     if (req.site === "indeed") {
-      // Indeed doesn't have a simple form login that works headlessly — return helpful error
       return { ok: false, error: "Indeed login via automation is not supported yet" };
     }
 
