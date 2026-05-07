@@ -74,7 +74,7 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
           return {
             ok: false,
             error:
-              "Your LinkedIn account has no password (created with Google). Please go to linkedin.com → Settings → Sign In & Security → Change Password to set one, then retry.",
+              "LinkedIn sent a verification email to your inbox instead of logging in (new device detection). Check your email, click the LinkedIn link to verify, then come back and try connecting again.",
           };
         }
         if (body.includes("incorrect") || body.includes("Invalid") || body.includes("wrong")) {
