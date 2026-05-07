@@ -3,6 +3,10 @@ const { chromium } = require("playwright-extra");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
+import { google } from 'googleapis';
+import * as cheerio from 'cheerio';
+import { Page } from 'playwright';
+
 // Apply stealth globally — makes Playwright indistinguishable from a real Chrome browser.
 // This bypasses LinkedIn's bot detection (webdriver flags, navigator checks, fingerprinting).
 chromium.use(StealthPlugin());
@@ -16,12 +20,67 @@ export interface LoginRequest {
   email: string;
   password: string;
   loginMethod?: "email" | "google";
+  gmailAccessToken?: string;
 }
 
 export interface LoginResult {
   ok: boolean;
   cookiesJson?: string;
   error?: string;
+}
+
+async function verifyViaEmail(page: Page, gmailAccessToken: string): Promise<boolean> {
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({ access_token: gmailAccessToken });
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+  // Poll for the email for up to 30 seconds
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await gmail.users.messages.list({
+        userId: 'me',
+        q: 'from:notifications@linkedin.com subject:"Verify your sign-in"',
+        maxResults: 1,
+      });
+      if (res.data.messages && res.data.messages.length > 0) {
+        const messageId = res.data.messages[0].id!;
+        const msg = await gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+          format: 'full',
+        });
+        const payload = msg.data.payload;
+        let body = '';
+        if (payload?.body?.data) {
+          body = Buffer.from(payload.body.data, 'base64').toString();
+        } else if (payload?.parts) {
+          // Handle multipart
+          for (const part of payload.parts) {
+            if (part.mimeType === 'text/html' && part.body?.data) {
+              body = Buffer.from(part.body.data, 'base64').toString();
+              break;
+            }
+          }
+        }
+        if (body) {
+          const $ = cheerio.load(body);
+          const link = $('a').attr('href');
+          if (link && link.includes('linkedin.com')) {
+            await page.goto(link);
+            await page.waitForTimeout(5000);
+            const currentUrl = page.url();
+            if (!currentUrl.includes('/login')) {
+              return true;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Gmail API error:', e);
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
 }
 
 
@@ -85,11 +144,24 @@ export async function loginSite(req: LoginRequest): Promise<LoginResult> {
       ) {
         const body = (await page.textContent("body")) ?? "";
         if (body.includes("one-time link") || body.includes("emailed") || body.includes("check your email")) {
-          return {
-            ok: false,
-            error:
-              "LinkedIn sent a verification email to your inbox instead of logging in (new device detection). Check your email, click the LinkedIn link to verify, then come back and try connecting again.",
-          };
+          if (req.gmailAccessToken) {
+            // Try to verify via email
+            const verified = await verifyViaEmail(page, req.gmailAccessToken);
+            if (verified) {
+              // Continue to check login success
+            } else {
+              return {
+                ok: false,
+                error: "Failed to automatically verify the LinkedIn email. Please check your email manually and click the verification link.",
+              };
+            }
+          } else {
+            return {
+              ok: false,
+              error:
+                "LinkedIn sent a verification email to your inbox instead of logging in (new device detection). Provide a Gmail access token to automate verification, or check your email and click the LinkedIn link manually, then try connecting again.",
+            };
+          }
         }
         if (body.includes("incorrect") || body.includes("Invalid") || body.includes("wrong")) {
           return { ok: false, error: "Invalid LinkedIn credentials — check your email and password" };
