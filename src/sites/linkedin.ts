@@ -9,23 +9,49 @@ const UA =
  * Attempt to log in to LinkedIn using email + password or Google account.
  * Returns true if login succeeded, false otherwise.
  */
-async function loginLinkedIn(page: Page, email: string, password: string, loginMethod: 'email' | 'google' = 'email'): Promise<boolean> {
+async function loginLinkedIn(page: Page, email: string, password: string, loginMethod: 'email' | 'google' = 'email'): Promise<{ success: boolean; error?: string }> {
   try {
     await page.goto("https://www.linkedin.com/uas/login?fromSignIn=true&trk=cold_join_sign_in", {
       waitUntil: "domcontentloaded",
       timeout: 20_000,
     });
-    // Fill email and password on the LinkedIn login form
-    await page.fill("[name='session_key']", email);
-    await page.fill("[name='session_password']", password);
-    await page.click("button[type='submit']");
+
+    // Check if login form is present
+    const emailField = page.locator("[name='session_key']");
+    const passwordField = page.locator("[name='session_password']");
+    const submitBtn = page.locator("button[type='submit']");
+
+    if (!(await emailField.isVisible({ timeout: 5000 }))) {
+      return { success: false, error: "LinkedIn login page did not load properly — email field not found" };
+    }
+
+    // Fill email and password
+    await emailField.fill(email);
+    await passwordField.fill(password);
+
+    // Click submit
+    await submitBtn.click();
+
     // Wait for navigation after login
     await page.waitForTimeout(5_000);
+
     const url = page.url();
     // Successful login redirects away from /login and /checkpoint
-    return !url.includes("/login") && !url.includes("/checkpoint") && !url.includes("/authwall");
-  } catch {
-    return false;
+    if (url.includes("/login") || url.includes("/checkpoint") || url.includes("/authwall")) {
+      const pageContent = await page.textContent("body") || "";
+      if (pageContent.includes("incorrect") || pageContent.includes("Invalid")) {
+        return { success: false, error: "Invalid LinkedIn credentials — please check your email and password" };
+      }
+      if (pageContent.includes("challenge") || pageContent.includes("verification")) {
+        return { success: false, error: "LinkedIn requires additional verification — try again later or use different credentials" };
+      }
+      return { success: false, error: "LinkedIn login failed — possibly due to network issues or page changes" };
+    }
+
+    return { success: true };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : "Unknown error";
+    return { success: false, error: `LinkedIn login error: ${errorMsg}` };
   }
 }
 
@@ -64,14 +90,14 @@ export async function applyLinkedIn(
 
   // If credentials provided, log in first before navigating to the job
   if (credentials) {
-    const loggedIn = await loginLinkedIn(page, credentials.siteEmail, credentials.sitePassword, credentials.loginMethod || 'email');
-    if (!loggedIn) {
+    const loginResult = await loginLinkedIn(page, credentials.siteEmail, credentials.sitePassword, credentials.loginMethod || 'email');
+    if (!loginResult.success) {
       const ss = await page.screenshot();
       await context.close();
       return {
         ok: false,
         applied: false,
-        message: "LinkedIn login failed — please check your email and password",
+        message: loginResult.error || "LinkedIn login failed — please check your credentials",
         screenshotBase64: ss.toString("base64"),
         requiresLogin: true,
       };
@@ -88,11 +114,16 @@ export async function applyLinkedIn(
 
     // If redirected to login page the session cookies are expired / no credentials given
     if (page.url().includes("/login") || page.url().includes("/checkpoint") || page.url().includes("/authwall")) {
+      const pageContent = await page.textContent("body") || "";
+      let message = "LinkedIn requires login — please provide your credentials";
+      if (pageContent.includes("challenge") || pageContent.includes("verification")) {
+        message = "LinkedIn requires additional verification — try connecting your LinkedIn account in the app";
+      }
       const ss = await page.screenshot();
       return {
         ok: false,
         applied: false,
-        message: "LinkedIn requires login — please provide your credentials",
+        message,
         screenshotBase64: ss.toString("base64"),
         requiresLogin: true,
       };
@@ -125,22 +156,32 @@ export async function applyLinkedIn(
           page.url().includes("/authwall") ||
           page.url().includes("/checkpoint")
         ) {
+          const pageContent = await page.textContent("body") || "";
+          let message = "LinkedIn requires login to view and apply to jobs — please provide your credentials";
+          if (pageContent.includes("challenge") || pageContent.includes("verification")) {
+            message = "LinkedIn requires additional verification — try connecting your LinkedIn account in the app";
+          }
           const ss = await page.screenshot();
           return {
             ok: false,
             applied: false,
-            message: "LinkedIn requires login to view and apply to jobs — please provide your credentials",
+            message,
             screenshotBase64: ss.toString("base64"),
             requiresLogin: true,
           };
         }
       } else {
         // No job cards visible without login
+        const pageContent = await page.textContent("body") || "";
+        let message = "LinkedIn requires login to view and apply to jobs — please provide your credentials";
+        if (pageContent.includes("challenge") || pageContent.includes("verification")) {
+          message = "LinkedIn requires additional verification — try connecting your LinkedIn account in the app";
+        }
         const ss = await page.screenshot();
         return {
           ok: false,
           applied: false,
-          message: "LinkedIn requires login to view and apply to jobs — please provide your credentials",
+          message,
           screenshotBase64: ss.toString("base64"),
           requiresLogin: true,
         };
@@ -164,12 +205,19 @@ export async function applyLinkedIn(
         currentUrl.includes("/login") ||
         currentUrl.includes("/authwall") ||
         currentUrl.includes("/checkpoint");
+      let message = isLoginWall
+        ? "LinkedIn requires login — please provide your credentials"
+        : "No Easy Apply button — may require external application";
+      if (isLoginWall) {
+        const pageContent = await page.textContent("body") || "";
+        if (pageContent.includes("challenge") || pageContent.includes("verification")) {
+          message = "LinkedIn requires additional verification — try connecting your LinkedIn account in the app";
+        }
+      }
       return {
         ok: false,
         applied: false,
-        message: isLoginWall
-          ? "LinkedIn requires login — please provide your credentials"
-          : "No Easy Apply button — may require external application",
+        message,
         screenshotBase64: ss.toString("base64"),
         requiresLogin: isLoginWall,
       };
